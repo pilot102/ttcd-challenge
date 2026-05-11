@@ -2,14 +2,24 @@ import { useEffect, useState } from 'react'
 import { Link } from 'react-router-dom'
 import { supabase } from '../supabase'
 
+const RULES = [
+  { n: 1, text: 'Jeder darf max. 3 Plätze höher herausfordern.' },
+  { n: 2, text: 'Jeder darf max. 2 Herausforderungen pro Monat machen.' },
+  { n: 3, text: 'Das Spiel muss innert 21 Tagen ausgetragen werden, sonst W.O.-Sieg für Herausforderer.' },
+  { n: 4, text: 'Spielmodus: Best of 5 Sätze.' },
+  { n: 5, text: 'Sieger übernimmt Rang. Verlierer und Zwischenplätze rutschen zurück.' },
+  { n: 6, text: 'Rückspiel erst nach 30 Tagen möglich.' },
+  { n: 7, text: 'Laufzeit: September – Mai.' },
+  { n: 8, text: 'Herausforderung per WhatsApp – Antwortpflicht innerhalb 48 Stunden (akzeptieren, Terminvorschlag oder W.O.).' },
+]
+
 export default function Ladder() {
   const [players, setPlayers] = useState([])
   const [openChallenges, setOpenChallenges] = useState([])
   const [loading, setLoading] = useState(true)
+  const [showRules, setShowRules] = useState(false)
 
-  useEffect(() => {
-    fetchData()
-  }, [])
+  useEffect(() => { fetchData() }, [])
 
   async function fetchData() {
     const [{ data: playersData }, { data: challengesData }] = await Promise.all([
@@ -49,7 +59,7 @@ export default function Ladder() {
       <div className="nav">
         <Link to="/" className="active">Rangliste</Link>
         <Link to="/result">Resultat eintragen</Link>
-        <Link to="/admin">Admin</Link>
+        <button onClick={() => setShowRules(true)}>Regeln</button>
       </div>
 
       {loading ? (
@@ -58,16 +68,10 @@ export default function Ladder() {
         <>
           <div className="ladder-list">
             {players.map(p => (
-              <Link
-                key={p.id}
-                to={`/player/${p.id}`}
-                className={getRowClass(p.rank, players.length)}
-              >
+              <Link key={p.id} to={`/player/${p.id}`} className={getRowClass(p.rank, players.length)}>
                 <div className="rank-badge">{p.rank}</div>
                 <div className="player-name">{p.name}</div>
-                {hasOpenChallenge(p.id) && (
-                  <span className="challenge-badge">⚔ Challenge</span>
-                )}
+                {hasOpenChallenge(p.id) && <span className="challenge-badge">⚔ Challenge</span>}
               </Link>
             ))}
           </div>
@@ -95,7 +99,37 @@ export default function Ladder() {
               </div>
             </>
           )}
+
+          {/* Admin link versteckt unten */}
+          <div style={{ textAlign: 'center', marginTop: 48 }}>
+            <Link to="/admin" style={{ fontSize: '0.7rem', color: 'var(--border)', textDecoration: 'none', letterSpacing: 1 }}>
+              ⚙ admin
+            </Link>
+          </div>
         </>
+      )}
+
+      {/* Regeln Modal */}
+      {showRules && (
+        <div className="modal-overlay" onClick={() => setShowRules(false)}>
+          <div className="modal" onClick={e => e.stopPropagation()}>
+            <div className="modal-title">📋 Regeln</div>
+            {RULES.map(r => (
+              <div key={r.n} style={{ display: 'flex', gap: 14, marginBottom: 14, alignItems: 'flex-start' }}>
+                <div style={{
+                  minWidth: 28, height: 28, borderRadius: 8,
+                  background: 'var(--accent)', color: '#fff',
+                  display: 'flex', alignItems: 'center', justifyContent: 'center',
+                  fontFamily: 'Bebas Neue, sans-serif', fontSize: '1rem', flexShrink: 0
+                }}>{r.n}</div>
+                <div style={{ fontSize: '0.9rem', lineHeight: 1.5, paddingTop: 4 }}>{r.text}</div>
+              </div>
+            ))}
+            <button className="btn btn-ghost" style={{ width: '100%', marginTop: 8 }} onClick={() => setShowRules(false)}>
+              Schliessen
+            </button>
+          </div>
+        </div>
       )}
     </div>
   )
