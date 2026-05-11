@@ -7,16 +7,15 @@ export default function PlayerProfile() {
   const [player, setPlayer] = useState(null)
   const [history, setHistory] = useState([])
   const [loading, setLoading] = useState(true)
+  const [deleting, setDeleting] = useState(null)
 
-  useEffect(() => {
-    fetchData()
-  }, [id])
+  useEffect(() => { fetchData() }, [id])
 
   async function fetchData() {
     const [{ data: playerData }, { data: challengesData }] = await Promise.all([
       supabase.from('players').select('*').eq('id', id).single(),
       supabase.from('challenges')
-        .select('*, challenger:challenger_id(id, name), challenged:challenged_id(id, name)')
+        .select('*, challenger:challenger_id(id, name, rank), challenged:challenged_id(id, name, rank)')
         .eq('status', 'PLAYED')
         .or(`challenger_id.eq.${id},challenged_id.eq.${id}`)
         .order('played_at', { ascending: false })
@@ -24,6 +23,17 @@ export default function PlayerProfile() {
     setPlayer(playerData)
     setHistory(challengesData || [])
     setLoading(false)
+  }
+
+  async function deleteResult(challenge) {
+    if (!confirm(`Ergebnis wirklich löschen?\n${challenge.challenger?.name} vs ${challenge.challenged?.name}\n\nACHTUNG: Die Ränge werden NICHT automatisch zurückgesetzt – bitte manuell via Admin korrigieren falls nötig.`)) return
+
+    setDeleting(challenge.id)
+    const { error } = await supabase.from('challenges').delete().eq('id', challenge.id)
+    setDeleting(null)
+
+    if (error) { alert('Fehler: ' + error.message); return }
+    fetchData()
   }
 
   if (loading) return <div className="page"><div className="spinner" /></div>
@@ -46,7 +56,8 @@ export default function PlayerProfile() {
 
       <div className="card">
         <div style={{ display: 'flex', alignItems: 'center', gap: 16, marginBottom: 20 }}>
-          <div className="rank-badge" style={{ width: 52, height: 52, fontSize: '1.5rem',
+          <div className="rank-badge" style={{
+            width: 52, height: 52, fontSize: '1.5rem',
             background: player.rank === 1 ? 'var(--gold)' : player.rank === 2 ? 'var(--silver)' : player.rank === 3 ? 'var(--bronze)' : 'var(--surface2)',
             color: player.rank <= 2 ? '#000' : 'var(--text)'
           }}>
@@ -54,27 +65,26 @@ export default function PlayerProfile() {
           </div>
           <div>
             <div style={{ fontSize: '1.3rem', fontWeight: 600 }}>{player.name}</div>
-            <div style={{ fontSize: '0.8rem', color: 'var(--text-muted)', letterSpacing: 1 }}>
-              Rang {player.rank}
-            </div>
+            <div style={{ fontSize: '0.8rem', color: 'var(--text-muted)', letterSpacing: 1 }}>Rang {player.rank}</div>
           </div>
         </div>
 
-        <div className="stats-row">
-          <div className="stat-pill">
+        {/* Stats – wrap on mobile */}
+        <div style={{ display: 'flex', gap: 8, flexWrap: 'wrap' }}>
+          <div className="stat-pill" style={{ minWidth: 70 }}>
             <div className="stat-pill-value" style={{ color: '#4ade80' }}>{wins}</div>
             <div className="stat-pill-label">Siege</div>
           </div>
-          <div className="stat-pill">
+          <div className="stat-pill" style={{ minWidth: 70 }}>
             <div className="stat-pill-value" style={{ color: 'var(--red)' }}>{losses}</div>
             <div className="stat-pill-label">Niederlagen</div>
           </div>
-          <div className="stat-pill">
+          <div className="stat-pill" style={{ minWidth: 70 }}>
             <div className="stat-pill-value">{history.length}</div>
             <div className="stat-pill-label">Spiele</div>
           </div>
           {history.length > 0 && (
-            <div className="stat-pill">
+            <div className="stat-pill" style={{ minWidth: 70 }}>
               <div className="stat-pill-value">{Math.round(wins / history.length * 100)}%</div>
               <div className="stat-pill-label">Siegquote</div>
             </div>
@@ -100,11 +110,11 @@ export default function PlayerProfile() {
             const theirRankBefore = isChallenger ? c.rank_challenged_before : c.rank_challenger_before
 
             return (
-              <div key={c.id} className="history-item">
-                <div className={`history-score ${won ? 'win' : 'loss'}`}>
+              <div key={c.id} className="history-item" style={{ alignItems: 'flex-start' }}>
+                <div className={`history-score ${won ? 'win' : 'loss'}`} style={{ paddingTop: 2 }}>
                   {myScore}:{theirScore}
                 </div>
-                <div>
+                <div style={{ flex: 1 }}>
                   <div className="history-opponent">
                     {won ? '⬆ ' : '⬇ '}
                     <Link to={`/player/${opponent?.id}`} style={{ color: 'var(--text)', textDecoration: 'none' }}>
@@ -112,12 +122,24 @@ export default function PlayerProfile() {
                     </Link>
                   </div>
                   <div className="history-rank-change">
-                    Rang {myRankBefore} → {theirRankBefore && won ? theirRankBefore : myRankBefore}
+                    Rang {myRankBefore} → {won ? theirRankBefore : myRankBefore}
+                  </div>
+                  <div className="history-date" style={{ marginTop: 2 }}>
+                    {c.played_at ? new Date(c.played_at).toLocaleDateString('de-CH') : '—'}
                   </div>
                 </div>
-                <div className="history-date">
-                  {c.played_at ? new Date(c.played_at).toLocaleDateString('de-CH') : '—'}
-                </div>
+                <button
+                  onClick={() => deleteResult(c)}
+                  disabled={deleting === c.id}
+                  style={{
+                    background: 'none', border: '1px solid var(--border)',
+                    borderRadius: 8, padding: '4px 10px', color: 'var(--text-muted)',
+                    cursor: 'pointer', fontSize: '0.75rem', flexShrink: 0,
+                    opacity: deleting === c.id ? 0.4 : 1
+                  }}
+                >
+                  🗑
+                </button>
               </div>
             )
           })}
