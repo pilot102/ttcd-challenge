@@ -74,8 +74,16 @@ export default function Admin() {
     setAddSuccess('')
     if (!newName.trim()) { setAddError('Name eingeben.'); return }
 
-    const activePlayers = players.filter(p => p.active)
-    const maxRank = activePlayers.length + 1
+    // Höchsten aktiven Rang direkt aus DB holen
+    const { data: maxData } = await supabase
+      .from('players')
+      .select('rank')
+      .eq('active', true)
+      .order('rank', { ascending: false })
+      .limit(1)
+      .single()
+
+    const maxRank = (maxData?.rank || 0) + 1
     const { error } = await supabase.from('players').insert({ name: newName.trim(), rank: maxRank })
     if (error) { setAddError('Fehler: ' + error.message); return }
     setAddSuccess(`${newName} wurde als Rang ${maxRank} hinzugefügt.`)
