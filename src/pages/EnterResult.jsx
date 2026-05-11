@@ -153,7 +153,8 @@ export default function EnterResult() {
         await manualRankUpdate(winnerId, loserRankBefore, winnerRankBefore)
       }
     }
-    // If challenged wins, no rank change
+    // If challenged wins → no rank change (defender keeps position)
+    // This is correct per rules
 
     setSubmitting(false)
     setResultSuccess(`Resultat eingetragen! ${challenge.challenger.name} ${sa}:${sb} ${challenge.challenged.name}`)
