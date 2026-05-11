@@ -256,7 +256,7 @@ export default function EnterResult() {
 
       {mode === 'result' && (
         <div className="card">
-          <div className="section-title" style={{ margin: '0 0 16px' }}>Resultat eintragen</div>
+          <div className="section-title" style={{ margin: '0 0 16px' }}>⚔ Challenge</div>
 
           {resultError && <div className="alert alert-error">{resultError}</div>}
           {resultSuccess && <div className="alert alert-success">{resultSuccess}</div>}
