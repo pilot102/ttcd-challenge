@@ -58,7 +58,7 @@ export default function Ladder() {
 
       <div className="nav">
         <Link to="/" className="active">Rangliste</Link>
-        <Link to="/result">Resultat eintragen</Link>
+        <Link to="/result">⚔ Challenge</Link>
         <button onClick={() => setShowRules(true)}>Regeln</button>
       </div>
 
