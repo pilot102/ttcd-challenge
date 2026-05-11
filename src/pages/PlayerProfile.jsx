@@ -34,11 +34,10 @@ export default function PlayerProfile() {
     setLoading(false)
   }
 
-  function eligibleChallengers() {
+function eligibleChallengers() {
     if (!player) return []
     return allPlayers.filter(p => {
       if (p.id === player.id) return false
-      if (p.rank === 1) return false
       if (p.rank >= player.rank) return false
       if (player.rank - p.rank > 3) return false
       return true
