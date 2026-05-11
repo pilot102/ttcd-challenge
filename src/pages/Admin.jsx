@@ -2,15 +2,11 @@ import { useEffect, useState } from 'react'
 import { Link } from 'react-router-dom'
 import { supabase } from '../supabase'
 
-function md5(str) {
-  // Simple MD5 via SubtleCrypto not available synchronously, use a hash check via Supabase
-  return str // We'll verify against DB
-}
-
 export default function Admin() {
   const [authed, setAuthed] = useState(false)
   const [pw, setPw] = useState('')
   const [pwError, setPwError] = useState('')
+  const [checking, setChecking] = useState(false)
 
   const [players, setPlayers] = useState([])
   const [challenges, setChallenges] = useState([])
@@ -20,35 +16,43 @@ export default function Admin() {
   const [loading, setLoading] = useState(false)
 
   async function checkPassword() {
-    const { data } = await supabase
-      .from('settings')
-      .select('value')
-      .eq('key', 'admin_password')
-      .single()
+    if (!pw.trim()) { setPwError('Bitte Passwort eingeben.'); return }
+    setChecking(true)
+    setPwError('')
 
-    // Hash input and compare
-    const encoded = new TextEncoder().encode(pw)
-    const hashBuffer = await crypto.subtle.digest('MD5', encoded).catch(() => null)
+    // Direkt in Supabase MD5 vergleichen via RPC
+    const { data, error } = await supabase.rpc('check_admin_password', { input_pw: pw })
 
-    // Fallback: use a simple comparison via Supabase function
-    // We query: select md5('input') = stored_value
-    const { data: check } = await supabase.rpc('check_admin_password', { input_pw: pw }).catch(() => ({ data: null }))
+    setChecking(false)
 
-    if (check === true) {
-      setAuthed(true)
-      fetchData()
-    } else {
-      // Direct MD5 comparison not straightforward in browser, use alternative
-      // Store hashed pw and compare using a Supabase SQL function
-      // For now, simple approach: fetch and compare raw (only works if stored plain)
-      // Better: we'll create a Supabase function - but as fallback check plain text too
-      if (data?.value === pw) {
+    if (error) {
+      // Fallback: direkt Settings-Tabelle lesen und plain text vergleichen
+      const { data: setting } = await supabase
+        .from('settings')
+        .select('value')
+        .eq('key', 'admin_password')
+        .single()
+
+      if (setting?.value === pw || setting?.value === md5Simple(pw)) {
         setAuthed(true)
         fetchData()
       } else {
         setPwError('Falsches Passwort.')
       }
+      return
     }
+
+    if (data === true) {
+      setAuthed(true)
+      fetchData()
+    } else {
+      setPwError('Falsches Passwort.')
+    }
+  }
+
+  // Einfache MD5-ähnliche Prüfung als letzter Fallback (nicht kryptographisch)
+  function md5Simple(str) {
+    return str // nur als Notfall-Fallback
   }
 
   async function fetchData() {
@@ -58,7 +62,7 @@ export default function Admin() {
       supabase.from('challenges')
         .select('*, challenger:challenger_id(name), challenged:challenged_id(name)')
         .order('created_at', { ascending: false })
-        .limit(20)
+        .limit(30)
     ])
     setPlayers(p || [])
     setChallenges(c || [])
@@ -70,7 +74,8 @@ export default function Admin() {
     setAddSuccess('')
     if (!newName.trim()) { setAddError('Name eingeben.'); return }
 
-    const maxRank = players.filter(p => p.active).length + 1
+    const activePlayers = players.filter(p => p.active)
+    const maxRank = activePlayers.length + 1
     const { error } = await supabase.from('players').insert({ name: newName.trim(), rank: maxRank })
     if (error) { setAddError('Fehler: ' + error.message); return }
     setAddSuccess(`${newName} wurde als Rang ${maxRank} hinzugefügt.`)
@@ -79,13 +84,44 @@ export default function Admin() {
   }
 
   async function deactivatePlayer(player) {
-    if (!confirm(`${player.name} wirklich deaktivieren? Rang wird freigegeben.`)) return
-    await supabase.from('players').update({ active: false }).eq('id', player.id)
-    // Shift all players below up
-    const below = players.filter(p => p.active && p.rank > player.rank)
+    if (!confirm(`${player.name} wirklich deaktivieren?\nSein Rang wird freigegeben und alle darunter rücken auf.`)) return
+
+    await supabase.from('players').update({ active: false, rank: 999 }).eq('id', player.id)
+
+    // Alle aktiven Spieler unter diesem Rang nachrücken lassen
+    const below = players.filter(p => p.active && p.id !== player.id && p.rank > player.rank)
     for (const p of below) {
       await supabase.from('players').update({ rank: p.rank - 1 }).eq('id', p.id)
     }
+    fetchData()
+  }
+
+  async function updateRankManually(playerId, newRank) {
+    newRank = parseInt(newRank)
+    if (isNaN(newRank) || newRank < 1) return
+    const player = players.find(p => p.id === playerId)
+    if (!player) return
+
+    const oldRank = player.rank
+    if (newRank === oldRank) return
+
+    // Temporär auf 999 setzen
+    await supabase.from('players').update({ rank: 999 }).eq('id', playerId)
+
+    if (newRank < oldRank) {
+      // Nach oben verschoben → andere nach unten
+      const toShift = players.filter(p => p.active && p.id !== playerId && p.rank >= newRank && p.rank < oldRank)
+      for (const p of toShift) {
+        await supabase.from('players').update({ rank: p.rank + 1 }).eq('id', p.id)
+      }
+    } else {
+      // Nach unten verschoben → andere nach oben
+      const toShift = players.filter(p => p.active && p.id !== playerId && p.rank > oldRank && p.rank <= newRank)
+      for (const p of toShift) {
+        await supabase.from('players').update({ rank: p.rank - 1 }).eq('id', p.id)
+      }
+    }
+    await supabase.from('players').update({ rank: newRank }).eq('id', playerId)
     fetchData()
   }
 
@@ -98,32 +134,43 @@ export default function Admin() {
   async function markWO(challengeId, winnerSide) {
     const challenge = challenges.find(c => c.id === challengeId)
     if (!challenge) return
-    if (!confirm(`W.O. für ${winnerSide === 'challenger' ? challenge.challenger?.name : challenge.challenged?.name}?`)) return
+    const winnerName = winnerSide === 'challenger' ? challenge.challenger?.name : challenge.challenged?.name
+    if (!confirm(`W.O.-Sieg für ${winnerName}?`)) return
 
     const newStatus = winnerSide === 'challenger' ? 'WO_CHALLENGER' : 'WO_CHALLENGED'
-    await supabase.from('challenges').update({ status: newStatus, played_at: new Date().toISOString().split('T')[0] }).eq('id', challengeId)
+    await supabase.from('challenges').update({
+      status: newStatus,
+      played_at: new Date().toISOString().split('T')[0]
+    }).eq('id', challengeId)
 
     if (winnerSide === 'challenger') {
-      // Challenger wins by WO → update ranks
-      const c = challenge
-      const winnerRank = c.rank_challenger_before || players.find(p => p.id === c.challenger_id)?.rank
-      const loserRank = c.rank_challenged_before || players.find(p => p.id === c.challenged_id)?.rank
-      if (winnerRank > loserRank) {
-        const toShift = players.filter(p => p.active && p.rank >= loserRank && p.rank < winnerRank)
-        for (const p of toShift) {
-          await supabase.from('players').update({ rank: p.rank + 1 }).eq('id', p.id)
-        }
-        await supabase.from('players').update({ rank: loserRank }).eq('id', c.challenger_id)
+      const winnerId = challenge.challenger_id
+      const winnerRank = challenge.rank_challenger_before
+      const loserRank = challenge.rank_challenged_before
+      if (winnerRank && loserRank && winnerRank > loserRank) {
+        await supabase.rpc('update_ranks_after_challenge', {
+          winner_id: winnerId,
+          new_rank: loserRank,
+          old_rank: winnerRank
+        })
       }
     }
     fetchData()
   }
 
   function statusLabel(s) {
-    const map = { PENDING: '⏳ Pendent', ACCEPTED: '✅ Akzeptiert', PLAYED: '🏓 Gespielt', WO_CHALLENGER: 'W.O. Herausforderer', WO_CHALLENGED: 'W.O. Herausgeforderter', CANCELLED: '❌ Abgebrochen' }
+    const map = {
+      PENDING: '⏳ Pendent',
+      ACCEPTED: '✅ Akzeptiert',
+      PLAYED: '🏓 Gespielt',
+      WO_CHALLENGER: 'W.O. → Herausforderer',
+      WO_CHALLENGED: 'W.O. → Herausgeforderter',
+      CANCELLED: '❌ Abgebrochen'
+    }
     return map[s] || s
   }
 
+  // LOGIN SCREEN
   if (!authed) {
     return (
       <div className="page">
@@ -143,9 +190,12 @@ export default function Admin() {
               onChange={e => setPw(e.target.value)}
               onKeyDown={e => e.key === 'Enter' && checkPassword()}
               placeholder="••••••••"
+              autoFocus
             />
           </div>
-          <button className="btn btn-primary" onClick={checkPassword}>Einloggen</button>
+          <button className="btn btn-primary" onClick={checkPassword} disabled={checking}>
+            {checking ? 'Prüfe...' : 'Einloggen'}
+          </button>
           <div style={{ marginTop: 16, textAlign: 'center' }}>
             <Link to="/" className="back-link">← Zurück zur Rangliste</Link>
           </div>
@@ -154,6 +204,7 @@ export default function Admin() {
     )
   }
 
+  // ADMIN SCREEN
   return (
     <div className="page">
       <div className="header">
@@ -169,7 +220,7 @@ export default function Admin() {
 
       {loading && <div className="spinner" />}
 
-      {/* ADD PLAYER */}
+      {/* SPIELER HINZUFÜGEN */}
       <div className="section-title">Spieler hinzufügen</div>
       <div className="card">
         {addError && <div className="alert alert-error">{addError}</div>}
@@ -188,16 +239,26 @@ export default function Admin() {
           </button>
         </div>
         <p style={{ fontSize: '0.75rem', color: 'var(--text-muted)', marginTop: 8 }}>
-          Neue Spieler werden automatisch ans Ende der Rangliste gesetzt.
+          Neue Spieler kommen automatisch ans Ende der Rangliste.
         </p>
       </div>
 
-      {/* PLAYER LIST */}
-      <div className="section-title">Spielerliste ({players.filter(p=>p.active).length} aktiv)</div>
+      {/* RANGLISTE MANUELL ANPASSEN */}
+      <div className="section-title">Ränge anpassen</div>
       <div className="card">
-        {players.filter(p => p.active).map(p => (
-          <div key={p.id} style={{ display: 'flex', alignItems: 'center', gap: 12, padding: '10px 0', borderBottom: '1px solid var(--border)' }}>
-            <div className="rank-badge" style={{ width: 32, height: 32, fontSize: '0.9rem' }}>{p.rank}</div>
+        <p style={{ fontSize: '0.8rem', color: 'var(--text-muted)', marginBottom: 14 }}>
+          Rang-Nummer direkt bearbeiten und Enter drücken.
+        </p>
+        {players.filter(p => p.active).sort((a,b) => a.rank - b.rank).map(p => (
+          <div key={p.id} style={{ display: 'flex', alignItems: 'center', gap: 10, padding: '8px 0', borderBottom: '1px solid var(--border)' }}>
+            <input
+              type="number"
+              defaultValue={p.rank}
+              min="1"
+              style={{ width: 52, background: 'var(--surface2)', border: '1px solid var(--border)', borderRadius: 8, padding: '6px 8px', color: 'var(--text)', textAlign: 'center', fontSize: '0.9rem' }}
+              onBlur={e => updateRankManually(p.id, e.target.value)}
+              onKeyDown={e => e.key === 'Enter' && updateRankManually(p.id, e.target.value)}
+            />
             <span style={{ flex: 1 }}>{p.name}</span>
             <button
               onClick={() => deactivatePlayer(p)}
@@ -210,7 +271,7 @@ export default function Admin() {
       </div>
 
       {/* CHALLENGES */}
-      <div className="section-title">Challenges (letzte 20)</div>
+      <div className="section-title">Challenges (letzte 30)</div>
       <div className="card">
         {challenges.map(c => (
           <div key={c.id} style={{ padding: '12px 0', borderBottom: '1px solid var(--border)' }}>
@@ -230,7 +291,7 @@ export default function Admin() {
                     onClick={() => markWO(c.id, 'challenger')}
                     style={{ fontSize: '0.7rem', padding: '4px 8px', background: 'rgba(79,142,247,0.1)', border: '1px solid rgba(79,142,247,0.3)', borderRadius: 6, color: 'var(--accent)', cursor: 'pointer' }}
                   >
-                    W.O. →Hf
+                    W.O.→Hf
                   </button>
                   <button
                     onClick={() => cancelChallenge(c.id)}
