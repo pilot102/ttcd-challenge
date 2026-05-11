@@ -35,14 +35,14 @@ export default function PlayerProfile() {
   }
 
 function eligibleChallengers() {
-    if (!player) return []
-    return allPlayers.filter(p => {
-      if (p.id === player.id) return false
-      if (p.rank >= player.rank) return false
-      if (player.rank - p.rank > 3) return false
-      return true
-    })
-  }
+  if (!player) return []
+  return allPlayers.filter(p => {
+    if (p.id === player.id) return false
+    if (p.rank <= player.rank) return false          // nur Spieler die TIEFER stehen
+    if (p.rank - player.rank > 3) return false       // max. 3 Plätze tiefer
+    return true
+  })
+}
 
   async function submitChallenge() {
     setChallengeError('')
